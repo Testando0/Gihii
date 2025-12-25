@@ -14,58 +14,58 @@ export default async function handler(req) {
     const { prompt } = await req.json();
     const apiKey = process.env.NANO_BANANA_FLASH_API_KEY;
 
-    // Esta lista usa os nomes MAIS estáveis do Google em 2025
-    const modelsToTry = [
-      "gemini-1.5-flash-latest", // O apelido mais seguro
-      "gemini-1.5-flash",        // O padrão
-      "gemini-pro"               // O backup clássico
-    ];
+    if (!apiKey) throw new Error("API Key não configurada no Vercel");
 
-    let svgData = "";
-    let lastError = "";
+    // MODELO ESTÁVEL PARA 2025: gemini-1.5-flash
+    // ENDPOINT OBRIGATÓRIO: v1beta (para evitar o erro 404 da v1)
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
-    for (const model of modelsToTry) {
-      try {
-        // Tentamos o endpoint V1 que é o mais estável para produção
-        const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${apiKey}`;
-        
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: `Generate ONLY a valid SVG code for: ${prompt}. Do not include markdown or explanations. Start directly with <svg.` }] }]
-          })
-        });
-
-        const resJson = await response.json();
-
-        if (resJson.candidates && resJson.candidates[0].content.parts[0].text) {
-          svgData = resJson.candidates[0].content.parts[0].text;
-          break; 
-        } else if (resJson.error) {
-          lastError = resJson.error.message;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: `Generate ONLY the raw SVG code for: ${prompt}. 
+            Instructions: viewBox="0 0 512 512", no markdown, no explanations. 
+            The output must start with <svg and end with </svg>.`
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.9,
+          maxOutputTokens: 2000
         }
-      } catch (e) {
-        lastError = e.message;
-      }
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.error) {
+      // Se der erro de "not found", o erro virá aqui e será capturado pelo catch
+      throw new Error(`Google API: ${data.error.message}`);
     }
 
-    if (!svgData) throw new Error(lastError || "Falha na comunicação com Google AI");
+    if (!data.candidates || !data.candidates[0].content) {
+      throw new Error("O modelo recusou gerar a imagem. Tente outro prompt.");
+    }
 
-    // Limpeza Profunda: Remove markdown, espaços e textos extras
-    let cleanSvg = svgData.replace(/```svg|```xml|```/gi, '').trim();
-    const startIdx = cleanSvg.indexOf('<svg');
-    const endIdx = cleanSvg.lastIndexOf('</svg>');
-    
-    if (startIdx === -1) throw new Error("O modelo não gerou um código SVG válido.");
-    cleanSvg = cleanSvg.substring(startIdx, endIdx + 6);
+    let rawText = data.candidates[0].content.parts[0].text;
 
-    return new Response(JSON.stringify({ image: cleanSvg }), { status: 200, headers });
+    // Limpeza profunda de qualquer lixo de texto que o Gemini coloque
+    let svg = rawText.replace(/```svg|```xml|```/gi, '').trim();
+    const startIdx = svg.indexOf('<svg');
+    const endIdx = svg.lastIndexOf('</svg>');
+
+    if (startIdx === -1) throw new Error("A IA gerou texto em vez de um desenho.");
+    const finalSvg = svg.substring(startIdx, endIdx + 6);
+
+    return new Response(JSON.stringify({ image: finalSvg }), { status: 200, headers });
 
   } catch (error) {
+    console.error("ERRO LOG:", error.message);
     return new Response(JSON.stringify({ 
       error: error.message,
-      image: `<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" fill="#000"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="yellow" font-family="Arial">ERRO: Verifique sua API KEY no Vercel</text></svg>`
+      image: `<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" fill="#111"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#ff4444" font-size="16" font-family="sans-serif">Erro: ${error.message}</text></svg>`
     }), { status: 200, headers });
   }
 }
