@@ -14,58 +14,60 @@ export default async function handler(req) {
     const { prompt } = await req.json();
     const apiKey = process.env.NANO_BANANA_FLASH_API_KEY;
 
-    if (!apiKey) throw new Error("API Key não configurada no Vercel");
+    // LISTA DEFINITIVA DE DEZEMBRO/2025
+    // Testamos do mais moderno (2.0) ao mais estável (1.5-002)
+    const modelVersions = [
+      "gemini-2.0-flash-exp",
+      "gemini-1.5-flash-002",
+      "gemini-1.5-flash-001",
+      "gemini-1.5-flash",
+      "gemini-pro"
+    ];
 
-    // MODELO ESTÁVEL PARA 2025: gemini-1.5-flash
-    // ENDPOINT OBRIGATÓRIO: v1beta (para evitar o erro 404 da v1)
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    let finalSvg = "";
+    let errorLog = "";
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: `Generate ONLY the raw SVG code for: ${prompt}. 
-            Instructions: viewBox="0 0 512 512", no markdown, no explanations. 
-            The output must start with <svg and end with </svg>.`
-          }]
-        }],
-        generationConfig: {
-          temperature: 0.9,
-          maxOutputTokens: 2000
+    for (const modelId of modelVersions) {
+      try {
+        // Tentamos v1beta que é o endpoint de maior compatibilidade para o Flash
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: `Output ONLY the raw SVG code for: ${prompt}. No markdown, no intro. Starts with <svg and ends with </svg>.` }] }]
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.candidates && data.candidates[0].content.parts[0].text) {
+          finalSvg = data.candidates[0].content.parts[0].text;
+          break; // FUNCIONOU! Para o loop.
+        } else if (data.error) {
+          errorLog = data.error.message;
         }
-      })
-    });
-
-    const data = await response.json();
-
-    if (data.error) {
-      // Se der erro de "not found", o erro virá aqui e será capturado pelo catch
-      throw new Error(`Google API: ${data.error.message}`);
+      } catch (e) {
+        errorLog = e.message;
+        continue;
+      }
     }
 
-    if (!data.candidates || !data.candidates[0].content) {
-      throw new Error("O modelo recusou gerar a imagem. Tente outro prompt.");
-    }
+    if (!finalSvg) throw new Error("Nenhum modelo disponível: " + errorLog);
 
-    let rawText = data.candidates[0].content.parts[0].text;
+    // Limpeza radical de qualquer lixo de texto
+    let cleanSvg = finalSvg.replace(/```svg|```xml|```/gi, '').trim();
+    const startIdx = cleanSvg.indexOf('<svg');
+    const endIdx = cleanSvg.lastIndexOf('</svg>');
+    
+    if (startIdx === -1) throw new Error("O modelo retornou texto, não imagem.");
+    cleanSvg = cleanSvg.substring(startIdx, endIdx + 6);
 
-    // Limpeza profunda de qualquer lixo de texto que o Gemini coloque
-    let svg = rawText.replace(/```svg|```xml|```/gi, '').trim();
-    const startIdx = svg.indexOf('<svg');
-    const endIdx = svg.lastIndexOf('</svg>');
-
-    if (startIdx === -1) throw new Error("A IA gerou texto em vez de um desenho.");
-    const finalSvg = svg.substring(startIdx, endIdx + 6);
-
-    return new Response(JSON.stringify({ image: finalSvg }), { status: 200, headers });
+    return new Response(JSON.stringify({ image: cleanSvg }), { status: 200, headers });
 
   } catch (error) {
-    console.error("ERRO LOG:", error.message);
     return new Response(JSON.stringify({ 
       error: error.message,
-      image: `<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" fill="#111"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#ff4444" font-size="16" font-family="sans-serif">Erro: ${error.message}</text></svg>`
+      image: `<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" fill="#000"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#ff0000" font-size="14">ERRO: ${error.message}</text></svg>`
     }), { status: 200, headers });
   }
 }
