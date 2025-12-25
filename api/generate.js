@@ -1,12 +1,11 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// Configuração para Vercel Serverless
 export const config = {
-  runtime: 'edge', // Usa Edge Functions para ser MUITO rápido (Flash)
+  runtime: 'edge',
 };
 
 export default async function handler(req) {
-  // Configuração de CORS para permitir que seu HTML converse com a API
+  // CORS
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       status: 200,
@@ -19,44 +18,62 @@ export default async function handler(req) {
   }
 
   if (req.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Método não permitido' }), { status: 405 });
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
   }
 
   try {
     const { prompt } = await req.json();
-
-    if (!prompt) {
-      throw new Error('Prompt é obrigatório');
-    }
-
     const apiKey = process.env.NANO_BANANA_FLASH_API_KEY;
+
     if (!apiKey) {
-      throw new Error('Chave de API não configurada no Vercel');
+      throw new Error('API Key não configurada no Vercel (Environment Variables).');
     }
 
-    // Inicializa o Google Generative AI
     const genAI = new GoogleGenerativeAI(apiKey);
     
-    // Usa o modelo FLASH para velocidade máxima ("Nano Banana")
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    // Usando explicitamente o modelo Flash
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-1.5-flash",
+      // Desabilitar filtros de segurança para permitir criatividade no SVG
+      safetySettings: [
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+      ]
+    });
 
-    // O "Truque" Nano Banana:
-    // O Flash é um modelo de texto, então pedimos para ele "alucinar" um SVG perfeito.
-    // Isso é mais rápido e barato que gerar PNGs e funciona com chaves gratuitas.
     const systemInstruction = `
-      Você é um gerador de imagens 'Nano Banana'. 
-      Sua tarefa é converter o pedido do usuário em um código SVG (Scalable Vector Graphics) completo, detalhado e artístico.
-      NÃO explique nada. NÃO use blocos de código markdown (como \`\`\`xml).
-      Apenas retorne o código cru do <svg>...</svg>.
-      Use cores vivas, gradientes e formas interessantes.
+      Você é um motor de renderização SVG (Scalable Vector Graphics).
+      Sua ÚNICA função é converter o prompt do usuário em código <svg> válido.
+      Regras:
+      1. NÃO escreva texto explicativo, apenas o código SVG.
+      2. NÃO use markdown (sem \`\`\`xml ou \`\`\`svg).
+      3. O SVG deve ter viewBox="0 0 512 512".
+      4. Use cores vivas e gradientes (defs/linearGradient) para ficar bonito.
+      5. Desenhe algo artístico e estilizado baseando-se no prompt: "${prompt}"
     `;
 
-    const result = await model.generateContent(`${systemInstruction}\n\nPedido do usuário: "${prompt}"`);
+    const result = await model.generateContent(systemInstruction);
     const response = await result.response;
     let svgCode = response.text();
 
-    // Limpeza básica caso o modelo insira markdown
-    svgCode = svgCode.replace(/```xml/g, '').replace(/```svg/g, '').replace(/```/g, '');
+    // Limpeza de segurança caso o modelo teime em usar markdown
+    svgCode = svgCode
+      .replace(/```xml/gi, '')
+      .replace(/```svg/gi, '')
+      .replace(/```/g, '')
+      .trim();
+
+    // Se o modelo responder algo que não parece SVG, força um erro ou SVG padrão
+    if (!svgCode.startsWith('<svg')) {
+       // Tenta achar onde começa o svg
+       const startIndex = svgCode.indexOf('<svg');
+       const endIndex = svgCode.lastIndexOf('</svg>');
+       if (startIndex !== -1 && endIndex !== -1) {
+           svgCode = svgCode.substring(startIndex, endIndex + 6);
+       }
+    }
 
     return new Response(JSON.stringify({ image: svgCode }), {
       status: 200,
@@ -67,8 +84,8 @@ export default async function handler(req) {
     });
 
   } catch (error) {
-    console.error(error);
-    return new Response(JSON.stringify({ error: error.message || 'Erro interno' }), {
+    console.error("Erro API:", error);
+    return new Response(JSON.stringify({ error: error.message || 'Erro ao gerar imagem' }), {
       status: 500,
       headers: { 'Access-Control-Allow-Origin': '*' },
     });
