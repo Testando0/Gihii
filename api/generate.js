@@ -5,7 +5,7 @@ export const config = {
 };
 
 export default async function handler(req) {
-  // CORS
+  // Configuração CORS
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       status: 200,
@@ -26,53 +26,56 @@ export default async function handler(req) {
     const apiKey = process.env.NANO_BANANA_FLASH_API_KEY;
 
     if (!apiKey) {
-      throw new Error('API Key não configurada no Vercel (Environment Variables).');
+      throw new Error('Chave de API ausente nas variáveis de ambiente.');
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
     
-    // Usando explicitamente o modelo Flash
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash",
-      // Desabilitar filtros de segurança para permitir criatividade no SVG
+    // TENTATIVA 1: Tenta usar a versão mais recente e estável do Flash
+    // "gemini-1.5-flash-latest" costuma resolver o erro 404
+    let model = genAI.getGenerativeModel({ 
+      model: "gemini-1.5-flash-latest",
       safetySettings: [
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+         { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+         { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+         { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+         { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
       ]
     });
 
     const systemInstruction = `
-      Você é um motor de renderização SVG (Scalable Vector Graphics).
-      Sua ÚNICA função é converter o prompt do usuário em código <svg> válido.
-      Regras:
-      1. NÃO escreva texto explicativo, apenas o código SVG.
-      2. NÃO use markdown (sem \`\`\`xml ou \`\`\`svg).
-      3. O SVG deve ter viewBox="0 0 512 512".
-      4. Use cores vivas e gradientes (defs/linearGradient) para ficar bonito.
-      5. Desenhe algo artístico e estilizado baseando-se no prompt: "${prompt}"
+      ATUE COMO: Um gerador de SVG (Scalable Vector Graphics).
+      OBJETIVO: Converter o prompt em código <svg> puro.
+      REGRAS:
+      1. NÃO use blocos de código markdown (\`\`\`xml). Retorne APENAS o código SVG começando com <svg.
+      2. Defina viewBox="0 0 512 512".
+      3. Seja criativo, use cores vibrantes.
+      PROMPT DO USUÁRIO: "${prompt}"
     `;
 
-    const result = await model.generateContent(systemInstruction);
+    let result;
+    try {
+        result = await model.generateContent(systemInstruction);
+    } catch (e) {
+        // Se o Flash falhar (404), tenta o modelo "gemini-pro" clássico como backup
+        console.warn("Flash falhou, tentando Gemini Pro...", e.message);
+        model = genAI.getGenerativeModel({ model: "gemini-pro" });
+        result = await model.generateContent(systemInstruction);
+    }
+
     const response = await result.response;
     let svgCode = response.text();
 
-    // Limpeza de segurança caso o modelo teime em usar markdown
+    // Limpeza forçada (remove markdown se o modelo desobedecer)
     svgCode = svgCode
-      .replace(/```xml/gi, '')
-      .replace(/```svg/gi, '')
-      .replace(/```/g, '')
-      .trim();
+        .replace(/```xml/gi, '')
+        .replace(/```svg/gi, '')
+        .replace(/```/g, '')
+        .trim();
 
-    // Se o modelo responder algo que não parece SVG, força um erro ou SVG padrão
-    if (!svgCode.startsWith('<svg')) {
-       // Tenta achar onde começa o svg
-       const startIndex = svgCode.indexOf('<svg');
-       const endIndex = svgCode.lastIndexOf('</svg>');
-       if (startIndex !== -1 && endIndex !== -1) {
-           svgCode = svgCode.substring(startIndex, endIndex + 6);
-       }
+    // Validação simples
+    if (!svgCode.includes('<svg')) {
+        throw new Error("O modelo gerou texto em vez de imagem. Tente novamente.");
     }
 
     return new Response(JSON.stringify({ image: svgCode }), {
@@ -84,8 +87,8 @@ export default async function handler(req) {
     });
 
   } catch (error) {
-    console.error("Erro API:", error);
-    return new Response(JSON.stringify({ error: error.message || 'Erro ao gerar imagem' }), {
+    console.error("Erro Final:", error);
+    return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { 'Access-Control-Allow-Origin': '*' },
     });
