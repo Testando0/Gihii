@@ -1,8 +1,7 @@
 {
   "name": "nano-banana-gen",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "dependencies": {
-    "@google/generative-ai": "^0.22.0",
-    "cors": "^2.8.5"
+    "@google/generative-ai": "^0.21.0"
   }
 }
