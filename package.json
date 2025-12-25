@@ -1,0 +1,11 @@
+{
+  "name": "nano-banana-gen",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node api/generate.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.1.0",
+    "cors": "^2.8.5"
+  }
+}
