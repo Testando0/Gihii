@@ -14,48 +14,62 @@ export default async function handler(req) {
     const { prompt } = await req.json();
     const apiKey = process.env.NANO_BANANA_FLASH_API_KEY;
 
-    // Chamada Direta via Fetch para a API V1 (Estável)
-    // Usamos o modelo gemini-1.5-flash que é o mais compatível globalmente
-    const apiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    // Lista de nomes técnicos exatos aceitos pela API v1 em 2025
+    const models = [
+      "gemini-1.5-flash-002",
+      "gemini-1.5-flash-001",
+      "gemini-1.5-flash",
+      "gemini-1.5-pro"
+    ];
 
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: `Gere apenas o código SVG para: ${prompt}. 
-            Regras: viewBox="0 0 512 512", sem textos explicativos, apenas a tag <svg> funcional.`
-          }]
-        }],
-        generationConfig: { temperature: 0.7, topP: 0.95, topK: 40, maxOutputTokens: 2048 }
-      })
-    });
+    let successData = null;
+    let lastErrorMessage = "";
 
-    const data = await response.json();
+    // Loop de sobrevivência: tenta cada variação de nome do modelo
+    for (const modelName of models) {
+      try {
+        const apiUrl = `https://generativelanguage.googleapis.com/v1/models/${modelName}:generateContent?key=${apiKey}`;
+        
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: `Generate ONLY the raw SVG code for: ${prompt}. No markdown, no talk. <svg viewBox="0 0 512 512">...` }] }]
+          })
+        });
 
-    if (data.error) {
-      throw new Error(data.error.message || "Erro na API do Google");
+        const data = await response.json();
+        
+        if (data.candidates && data.candidates[0].content.parts[0].text) {
+          successData = data.candidates[0].content.parts[0].text;
+          break; // Sucesso! Sai do loop.
+        } else if (data.error) {
+          lastErrorMessage = data.error.message;
+        }
+      } catch (e) {
+        lastErrorMessage = e.message;
+        continue;
+      }
     }
 
-    let svgCode = data.candidates[0].content.parts[0].text;
+    if (!successData) {
+      throw new Error(lastErrorMessage || "Nenhum modelo respondeu.");
+    }
 
-    // Limpeza de Markdown (Removendo ```svg e ```)
-    svgCode = svgCode.replace(/```svg|```xml|```/gi, '').trim();
+    // Limpeza absoluta do SVG
+    let svg = successData.replace(/```svg|```xml|```/gi, '').trim();
+    const startIdx = svg.indexOf('<svg');
+    const endIdx = svg.lastIndexOf('</svg>');
     
-    // Extração precisa da tag SVG
-    const start = svgCode.indexOf('<svg');
-    const end = svgCode.lastIndexOf('</svg>') + 6;
-    if (start === -1) throw new Error("O modelo não gerou um desenho válido.");
-    
-    const finalSvg = svgCode.substring(start, end);
+    if (startIdx === -1) throw new Error("O modelo não retornou um SVG válido.");
+    svg = svg.substring(startIdx, endIdx + 6);
 
-    return new Response(JSON.stringify({ image: finalSvg }), { status: 200, headers });
+    return new Response(JSON.stringify({ image: svg }), { status: 200, headers });
 
   } catch (error) {
     return new Response(JSON.stringify({ 
       error: error.message,
-      image: `<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" fill="#333"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-family="sans-serif">Erro: ${error.message}</text></svg>`
+      image: `<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" fill="#222"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="orange" font-size="20">Erro Crítico: ${error.message}</text></svg>`
     }), { status: 200, headers });
   }
 }
