@@ -1,9 +1,6 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
 export const config = { runtime: 'edge' };
 
 export default async function handler(req) {
-  // 1. Headers de CORS para evitar erros de domínio
   const headers = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -17,43 +14,48 @@ export default async function handler(req) {
     const { prompt } = await req.json();
     const apiKey = process.env.NANO_BANANA_FLASH_API_KEY;
 
-    if (!apiKey) throw new Error("Chave API não configurada no Vercel");
+    // Chamada Direta via Fetch para a API V1 (Estável)
+    // Usamos o modelo gemini-1.5-flash que é o mais compatível globalmente
+    const apiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
-    const genAI = new GoogleGenerativeAI(apiKey);
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: `Gere apenas o código SVG para: ${prompt}. 
+            Regras: viewBox="0 0 512 512", sem textos explicativos, apenas a tag <svg> funcional.`
+          }]
+        }],
+        generationConfig: { temperature: 0.7, topP: 0.95, topK: 40, maxOutputTokens: 2048 }
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.error) {
+      throw new Error(data.error.message || "Erro na API do Google");
+    }
+
+    let svgCode = data.candidates[0].content.parts[0].text;
+
+    // Limpeza de Markdown (Removendo ```svg e ```)
+    svgCode = svgCode.replace(/```svg|```xml|```/gi, '').trim();
     
-    // Lista de modelos ordenada pela maior taxa de sucesso atual
-    const modelsToTry = ["gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-1.5-flash-8b"];
-    let svgCode = "";
-    let errorLog = "";
+    // Extração precisa da tag SVG
+    const start = svgCode.indexOf('<svg');
+    const end = svgCode.lastIndexOf('</svg>') + 6;
+    if (start === -1) throw new Error("O modelo não gerou um desenho válido.");
+    
+    const finalSvg = svgCode.substring(start, end);
 
-    for (const modelName of modelsToTry) {
-      try {
-        const model = genAI.getGenerativeModel({ model: modelName });
-        const result = await model.generateContent(`Gere apenas um código <svg> artístico para: ${prompt}. viewBox="0 0 512 512". Sem markdown.`);
-        svgCode = result.response.text();
-        if (svgCode.includes('<svg')) break;
-      } catch (e) {
-        errorLog = e.message;
-        continue;
-      }
-    }
-
-    if (!svgCode.includes('<svg')) {
-      throw new Error("Erro nos modelos: " + errorLog);
-    }
-
-    // Limpeza rigorosa para garantir que o SVG seja renderizável
-    const cleanSvg = svgCode.substring(svgCode.indexOf('<svg'), svgCode.lastIndexOf('</svg>') + 6)
-                            .replace(/\\n/g, '')
-                            .replace(/```xml|```svg|```/gi, '');
-
-    return new Response(JSON.stringify({ image: cleanSvg }), { status: 200, headers });
+    return new Response(JSON.stringify({ image: finalSvg }), { status: 200, headers });
 
   } catch (error) {
-    // SEMPRE retorna JSON, mesmo no erro, para não dar "Unexpected token A"
     return new Response(JSON.stringify({ 
-      error: error.message, 
-      image: '<svg viewBox="0 0 512 512" xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)"><rect width="512" height="512" fill="#ffeeee"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" fill="#cc0000">Erro na API do Google</text></svg>' 
+      error: error.message,
+      image: `<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" fill="#333"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-family="sans-serif">Erro: ${error.message}</text></svg>`
     }), { status: 200, headers });
   }
 }
